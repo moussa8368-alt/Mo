@@ -96,13 +96,13 @@ jobs:
 
 
       # ============================================================
-      # 4. DEMARRER MT5 POUR INITIALISER LA STANDARD LIBRARY
+      # 4. INITIALISER LA STANDARD LIBRARY MQL5
       # ============================================================
       - name: Initialiser la Standard Library MQL5
         shell: pwsh
         run: |
           Write-Host "========================================"
-          Write-Host "INITIALISATION STANDARD LIBRARY"
+          Write-Host "INITIALISATION STANDARD LIBRARY MQL5"
           Write-Host "========================================"
 
           $terminal = Get-ChildItem `
@@ -121,13 +121,10 @@ jobs:
           Write-Host "Terminal MT5 trouve :"
           Write-Host $terminal.FullName
 
-          # Lancement en mode portable.
-          # Cela force MT5 a creer son environnement MQL5
-          # dans son propre repertoire.
-
           $terminalDir = Split-Path -Parent $terminal.FullName
+          $mql5Root = Join-Path $terminalDir "MQL5"
 
-          Write-Host "Repertoire MT5 : $terminalDir"
+          Write-Host "Racine MQL5 : $mql5Root"
 
           $process = Start-Process `
             -FilePath $terminal.FullName `
@@ -137,8 +134,8 @@ jobs:
           Write-Host "MT5 demarre."
 
           $tradeFile = Join-Path `
-            $terminalDir `
-            "MQL5\Include\Trade\Trade.mqh"
+            $mql5Root `
+            "Include\Trade\Trade.mqh"
 
           Write-Host "Attente de Trade.mqh..."
 
@@ -155,7 +152,6 @@ jobs:
             Start-Sleep -Seconds 2
           }
 
-          # Fermer MT5 apres initialisation.
           try {
             Stop-Process `
               -Id $process.Id `
@@ -166,8 +162,8 @@ jobs:
           }
 
           if (-not $found) {
-            Write-Error "Trade.mqh n'a pas ete cree."
-            Write-Error "Chemin attendu : $tradeFile"
+            Write-Error "Trade.mqh introuvable."
+            Write-Error "Chemin : $tradeFile"
             exit 1
           }
 
@@ -175,7 +171,7 @@ jobs:
           Write-Host "Standard Library detectee."
           Write-Host "Trade.mqh : $tradeFile"
 
-          "MQL5_ROOT=$terminalDir\MQL5" |
+          "MQL5_ROOT=$mql5Root" |
             Out-File `
               -FilePath $env:GITHUB_ENV `
               -Encoding utf8
@@ -192,37 +188,76 @@ jobs:
           Write-Host "========================================"
 
           $mql5Root = $env:MQL5_ROOT
-          $includeDir = "$mql5Root\Include"
 
-          $tradeFile = "$includeDir\Trade\Trade.mqh"
-          $objectFile = "$includeDir\Object.mqh"
-          $stdlibFile = "$includeDir\StdLibErr.mqh"
+          $tradeFile = Join-Path `
+            $mql5Root `
+            "Include\Trade\Trade.mqh"
 
           Write-Host "Racine MQL5 : $mql5Root"
-          Write-Host "Include      : $includeDir"
-          Write-Host "Trade.mqh    : $tradeFile"
+          Write-Host "Trade.mqh   : $tradeFile"
 
           if (-not (Test-Path $tradeFile)) {
             Write-Error "Trade.mqh absent."
             exit 1
           }
 
-          if (-not (Test-Path $objectFile)) {
-            Write-Error "Object.mqh absent."
-            exit 1
+          Write-Host ""
+          Write-Host "Trade.mqh OK."
+
+
+      # ============================================================
+      # 6. CREER UN CHEMIN SANS ESPACES
+      # ============================================================
+      - name: Creer chemin MQL5 sans espaces
+        shell: pwsh
+        run: |
+          Write-Host "========================================"
+          Write-Host "CREATION DU CHEMIN MQL5"
+          Write-Host "========================================"
+
+          $mql5Root = $env:MQL5_ROOT
+          $linkPath = "C:\MQL5"
+
+          if (Test-Path $linkPath) {
+            Write-Host "C:\MQL5 existe deja."
+
+            $item = Get-Item $linkPath -Force
+
+            if (-not $item.PSIsContainer) {
+              Remove-Item $linkPath -Force
+            }
           }
 
-          if (-not (Test-Path $stdlibFile)) {
-            Write-Error "StdLibErr.mqh absent."
+          if (-not (Test-Path $linkPath)) {
+
+            Write-Host "Creation du junction :"
+            Write-Host "$linkPath -> $mql5Root"
+
+            cmd.exe /c "mklink /J `"$linkPath`" `"$mql5Root`""
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Impossible de creer le junction C:\MQL5."
+              exit 1
+            }
+          }
+
+          if (-not (Test-Path "C:\MQL5\Include\Trade\Trade.mqh")) {
+            Write-Error "Trade.mqh inaccessible via C:\MQL5."
             exit 1
           }
 
           Write-Host ""
-          Write-Host "Standard Library MQL5 OK."
+          Write-Host "Chemin court MQL5 OK."
+          Write-Host "C:\MQL5\Include\Trade\Trade.mqh"
+
+          "MQL5_COMPILE_ROOT=C:\MQL5" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8
 
 
       # ============================================================
-      # 6. TROUVER LE ROBOT
+      # 7. TROUVER LE ROBOT
       # ============================================================
       - name: Trouver le robot
         shell: pwsh
@@ -254,7 +289,7 @@ jobs:
 
 
       # ============================================================
-      # 7. COMPILER LE ROBOT
+      # 8. COMPILER LE ROBOT
       # ============================================================
       - name: Compiler le robot
         shell: pwsh
@@ -264,38 +299,30 @@ jobs:
           Write-Host "========================================"
 
           $sourceFile = $env:SOURCE_FILE
-          $mql5Root = $env:MQL5_ROOT
           $metaeditor = $env:METAEDITOR_PATH
+          $includeRoot = $env:MQL5_COMPILE_ROOT
+          $buildDir = "C:\Build"
+          $logFile = "$buildDir\compile.log"
 
           if (-not (Test-Path $sourceFile)) {
-            Write-Error "Fichier source introuvable."
+            Write-Error "Source introuvable : $sourceFile"
             exit 1
           }
 
           if (-not (Test-Path $metaeditor)) {
-            Write-Error "MetaEditor introuvable."
+            Write-Error "MetaEditor introuvable : $metaeditor"
             exit 1
           }
 
-          $tradeFile = "$mql5Root\Include\Trade\Trade.mqh"
-
-          if (-not (Test-Path $tradeFile)) {
-            Write-Error "Trade.mqh introuvable."
+          if (-not (Test-Path "$includeRoot\Include\Trade\Trade.mqh")) {
+            Write-Error "Trade.mqh introuvable dans $includeRoot"
             exit 1
           }
-
-          $buildDir = "C:\Build"
 
           New-Item `
             -ItemType Directory `
             -Force `
             -Path $buildDir | Out-Null
-
-          $sourceName = [System.IO.Path]::GetFileNameWithoutExtension(
-            $sourceFile
-          )
-
-          $logFile = "$buildDir\compile.log"
 
           if (Test-Path $logFile) {
             Remove-Item `
@@ -306,30 +333,26 @@ jobs:
           Write-Host ""
           Write-Host "MetaEditor : $metaeditor"
           Write-Host "Source     : $sourceFile"
-          Write-Host "MQL5 Root  : $mql5Root"
+          Write-Host "Include    : $includeRoot"
           Write-Host "Log        : $logFile"
-
-          # ========================================================
-          # COMPILATION
-          # ========================================================
-
-          $arguments = @(
-            "/compile:$sourceFile"
-            "/include:$mql5Root"
-            "/log:$logFile"
-          )
 
           Write-Host ""
           Write-Host "Lancement de MetaEditor..."
 
-          $process = Start-Process `
-            -FilePath $metaeditor `
-            -ArgumentList $arguments `
-            -Wait `
-            -PassThru
+          # IMPORTANT :
+          # Aucun espace dans C:\MQL5.
+          # Cela evite le probleme observe :
+          # C:\Program\Include\Trade\Trade.mqh
+
+          & $metaeditor `
+            "/compile:$sourceFile" `
+            "/include:$includeRoot" `
+            "/log:$logFile"
+
+          $metaEditorExitCode = $LASTEXITCODE
 
           Write-Host ""
-          Write-Host "Code retour MetaEditor : $($process.ExitCode)"
+          Write-Host "Code retour MetaEditor : $metaEditorExitCode"
 
           Start-Sleep -Seconds 3
 
@@ -380,9 +403,7 @@ jobs:
           if ($resultLine -match "Result:\s*0 errors,\s*0 warnings") {
 
             Write-Host ""
-            Write-Host "========================================"
-            Write-Host "COMPILATION REUSSIE"
-            Write-Host "========================================"
+            Write-Host "COMPILATION REUSSIE."
 
           }
           elseif ($resultLine -match "Result:\s*0 errors") {
@@ -397,7 +418,7 @@ jobs:
           }
 
           # ========================================================
-          # RECHERCHE EX5
+          # RECHERCHE DU EX5
           # ========================================================
 
           Write-Host ""
@@ -405,42 +426,54 @@ jobs:
           Write-Host "RECHERCHE DU FICHIER EX5"
           Write-Host "========================================"
 
+          $sourceName = [System.IO.Path]::GetFileNameWithoutExtension(
+            $sourceFile
+          )
+
+          $sourceDirectory = Split-Path `
+            -Parent `
+            $sourceFile
+
           $expectedEx5 = Join-Path `
-            (Split-Path -Parent $sourceFile) `
+            $sourceDirectory `
             "$sourceName.ex5"
 
-          if (-not (Test-Path $expectedEx5)) {
+          $ex5File = $null
 
-            Write-Host ""
-            Write-Host "EX5 non trouve a l'emplacement attendu."
-            Write-Host "Recherche generale..."
+          if (Test-Path $expectedEx5) {
 
-            $ex5Files = Get-ChildItem `
+            $ex5File = Get-Item `
+              $expectedEx5
+
+          }
+          else {
+
+            Write-Host "Recherche du EX5 dans le workspace..."
+
+            $ex5File = Get-ChildItem `
               -Path $env:GITHUB_WORKSPACE `
               -Filter "$sourceName.ex5" `
               -Recurse `
               -File `
-              -ErrorAction SilentlyContinue
-
-            if ($ex5Files.Count -eq 0) {
-              Write-Error "Aucun fichier EX5 n'a ete genere."
-              exit 1
-            }
-
-            $expectedEx5 = $ex5Files |
+              -ErrorAction SilentlyContinue |
               Select-Object -First 1
+          }
+
+          if (-not $ex5File) {
+            Write-Error "Aucun fichier EX5 n'a ete genere."
+            exit 1
           }
 
           Write-Host ""
           Write-Host "EX5 trouve :"
-          Write-Host $expectedEx5.FullName
+          Write-Host $ex5File.FullName
 
           # ========================================================
-          # COPIE ARTIFACTS
+          # COPIER LE RESULTAT
           # ========================================================
 
           Copy-Item `
-            -Path $expectedEx5.FullName `
+            -Path $ex5File.FullName `
             -Destination "$buildDir\$sourceName.ex5" `
             -Force
 
@@ -459,7 +492,7 @@ jobs:
 
 
       # ============================================================
-      # 8. RECUPERER LES FICHIERS
+      # 9. RECUPERER LES ARTIFACTS
       # ============================================================
       - name: Recuperer le fichier compile
         uses: actions/upload-artifact@v4
@@ -467,5 +500,5 @@ jobs:
           name: Robot-Compile
           path: |
             C:\Build\*.ex5
-            C:\Build\*.log
+            C:\Build\compile.log
           if-no-files-found: error
