@@ -1,36 +1,44 @@
-      - name: Compiler le robot
+name: Compile MQL5
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Recuperer le code
+        uses: actions/checkout@v4
+
+      - name: Installer MetaTrader 5
         shell: pwsh
         run: |
-
           $buildDir = "C:\Build"
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path $buildDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
-          Write-Host "========================================"
-          Write-Host "PREPARATION DE LA COMPILATION"
-          Write-Host "========================================"
+          Write-Host "Telechargement de MetaTrader 5..."
 
-          # Recherche du fichier MQ5
-          $sourceFile = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Filter "BlackHippo_Buffalo_Pelerin_v1_10_AUDITED.mq5" `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+          Invoke-WebRequest `
+            -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" `
+            -OutFile "$buildDir\mt5setup.exe"
 
-          if (-not $sourceFile) {
-            Write-Error "Fichier MQ5 introuvable."
-            exit 1
-          }
+          Write-Host "Installation de MetaTrader 5..."
 
-          Write-Host "Source trouvee :"
-          Write-Host $sourceFile.FullName
+          Start-Process `
+            -FilePath "$buildDir\mt5setup.exe" `
+            -ArgumentList "/auto" `
+            -Wait
 
-          # Recherche de MetaEditor
+          Write-Host "Installation terminee."
+
+      - name: Trouver MetaEditor
+        shell: pwsh
+        run: |
+          Write-Host "Recherche de MetaEditor64.exe..."
+
           $metaeditor = Get-ChildItem `
             -Path "C:\Program Files" `
             -Filter "metaeditor64.exe" `
@@ -40,65 +48,93 @@
             Select-Object -First 1
 
           if (-not $metaeditor) {
+            $metaeditor = Get-ChildItem `
+              -Path "C:\Program Files (x86)" `
+              -Filter "metaeditor64.exe" `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          }
+
+          if (-not $metaeditor) {
             Write-Error "MetaEditor64.exe introuvable."
             exit 1
           }
 
-          Write-Host ""
-          Write-Host "MetaEditor :"
+          Write-Host "MetaEditor trouve :"
           Write-Host $metaeditor.FullName
 
-          # ==========================================================
-          # CREATION D'UN DOSSIER DE TRAVAIL MQL5
-          # ==========================================================
+          "METAEDITOR_PATH=$($metaeditor.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8
 
-          $mql5Dir = "C:\Build\MQL5"
-          $expertsDir = "$mql5Dir\Experts"
+      - name: Compiler le robot
+        shell: pwsh
+        run: |
+          $buildDir = "C:\Build"
+          $logFile = "$buildDir\compile.log"
 
           New-Item `
             -ItemType Directory `
             -Force `
-            -Path $expertsDir | Out-Null
+            -Path $buildDir | Out-Null
 
-          # Copie du robot
-          $localSource = "$expertsDir\$($sourceFile.Name)"
+          Write-Host "========================================"
+          Write-Host "RECHERCHE DU FICHIER MQ5"
+          Write-Host "========================================"
 
-          Copy-Item `
-            -Path $sourceFile.FullName `
-            -Destination $localSource `
-            -Force
+          $sourceFile = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter "BlackHippo_Buffalo_Pelerin_v1_10_AUDITED.mq5" `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $sourceFile) {
+            Write-Error "Fichier BlackHippo_Buffalo_Pelerin_v1_10_AUDITED.mq5 introuvable."
+
+            Write-Host ""
+            Write-Host "Fichiers MQ5 disponibles :"
+
+            Get-ChildItem `
+              -Path $env:GITHUB_WORKSPACE `
+              -Filter "*.mq5" `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host $_.FullName
+              }
+
+            exit 1
+          }
+
+          Write-Host "Fichier MQ5 trouve :"
+          Write-Host $sourceFile.FullName
 
           Write-Host ""
-          Write-Host "Copie du robot :"
-          Write-Host $localSource
+          Write-Host "========================================"
+          Write-Host "COMPILATION MQL5"
+          Write-Host "========================================"
 
-          # ==========================================================
-          # COMPILATION
-          # ==========================================================
-
-          $logFile = "$buildDir\compile.log"
+          Write-Host "MetaEditor : $env:METAEDITOR_PATH"
+          Write-Host "Source     : $($sourceFile.FullName)"
+          Write-Host "Log        : $logFile"
 
           if (Test-Path $logFile) {
             Remove-Item $logFile -Force
           }
 
-          Write-Host ""
-          Write-Host "========================================"
-          Write-Host "LANCEMENT DE METAEDITOR"
-          Write-Host "========================================"
-
           $arguments = @(
-            "/compile:$localSource"
+            "/compile:$($sourceFile.FullName)"
             "/log:$logFile"
           )
 
-          Write-Host "Arguments :"
-          $arguments | ForEach-Object {
-            Write-Host $_
-          }
-
           $process = Start-Process `
-            -FilePath $metaeditor.FullName `
+            -FilePath $env:METAEDITOR_PATH `
             -ArgumentList $arguments `
             -Wait `
             -PassThru
@@ -106,35 +142,21 @@
           Write-Host ""
           Write-Host "Code retour MetaEditor : $($process.ExitCode)"
 
-          # ==========================================================
-          # JOURNAL
-          # ==========================================================
-
           Start-Sleep -Seconds 3
 
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "JOURNAL DE COMPILATION"
+          Write-Host "========================================"
+
           if (Test-Path $logFile) {
-
-            Write-Host ""
-            Write-Host "========================================"
-            Write-Host "JOURNAL METAEDITOR"
-            Write-Host "========================================"
-
             Get-Content `
               $logFile `
               -ErrorAction SilentlyContinue
-
-            Write-Host "========================================"
-
-          } else {
-
-            Write-Host ""
-            Write-Warning "Le fichier compile.log n'existe pas."
-
           }
-
-          # ==========================================================
-          # RECHERCHE EX5
-          # ==========================================================
+          else {
+            Write-Warning "Le fichier compile.log n'a pas ete cree."
+          }
 
           Write-Host ""
           Write-Host "========================================"
@@ -142,21 +164,15 @@
           Write-Host "========================================"
 
           $ex5Files = Get-ChildItem `
-            -Path "C:\Build" `
+            -Path $env:GITHUB_WORKSPACE `
             -Filter "*.ex5" `
             -Recurse `
             -File `
             -ErrorAction SilentlyContinue
 
           if (-not $ex5Files) {
-
-            Write-Host ""
-            Write-Host "Aucun EX5 dans C:\Build."
-            Write-Host ""
-            Write-Host "Recherche dans le dossier du robot..."
-
             $ex5Files = Get-ChildItem `
-              -Path $expertsDir `
+              -Path "C:\Build" `
               -Filter "*.ex5" `
               -Recurse `
               -File `
@@ -164,15 +180,13 @@
           }
 
           if (-not $ex5Files) {
+            Write-Error "Aucun fichier EX5 n'a ete genere."
 
             Write-Host ""
-            Write-Host "AUCUN FICHIER EX5 GENERE."
-            Write-Host ""
-
-            Write-Host "Contenu du dossier MQL5 :"
+            Write-Host "Contenu du depot :"
 
             Get-ChildItem `
-              -Path $mql5Dir `
+              -Path $env:GITHUB_WORKSPACE `
               -Recurse `
               -File `
               -ErrorAction SilentlyContinue |
@@ -182,16 +196,11 @@
             exit 1
           }
 
-          Write-Host ""
-          Write-Host "EX5 TROUVE :"
+          Write-Host "Fichier(s) EX5 trouve(s) :"
 
           foreach ($file in $ex5Files) {
             Write-Host $file.FullName
           }
-
-          # ==========================================================
-          # COPIE DU RESULTAT
-          # ==========================================================
 
           $expectedName = [System.IO.Path]::GetFileNameWithoutExtension(
             $sourceFile.Name
@@ -207,20 +216,27 @@
             $mainEx5 = $ex5Files | Select-Object -First 1
           }
 
+          Write-Host ""
+          Write-Host "EX5 selectionne :"
+          Write-Host $mainEx5.FullName
+
           Copy-Item `
             -Path $mainEx5.FullName `
             -Destination "$buildDir\$($mainEx5.Name)" `
             -Force
 
           Write-Host ""
-          Write-Host "========================================"
-          Write-Host "COMPILATION TERMINEE"
-          Write-Host "========================================"
-
-          Write-Host "EX5 final :"
+          Write-Host "Fichier EX5 final :"
           Write-Host "$buildDir\$($mainEx5.Name)"
 
-          Get-ChildItem `
-            -Path $buildDir `
-            -Filter "*.ex5" |
-            Format-Table Name, Length, LastWriteTime -AutoSize
+          if ($process.ExitCode -ne 0) {
+            Write-Error "MetaEditor a retourne le code $($process.ExitCode)."
+            exit $process.ExitCode
+          }
+
+      - name: Recuperer le fichier compile
+        uses: actions/upload-artifact@v4
+        with:
+          name: Robot-Compile
+          path: C:\Build\*.ex5
+          if-no-files-found: error
