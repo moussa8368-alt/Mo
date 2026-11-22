@@ -11,13 +11,13 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. RECUPERATION DU DEPOT
+      # 1. RECUPERER LE CODE DU ROBOT
       # ============================================================
       - name: Recuperer le code
         uses: actions/checkout@v4
 
       # ============================================================
-      # 2. INSTALLATION DE METATRADER 5
+      # 2. INSTALLER METATRADER 5
       # ============================================================
       - name: Installer MetaTrader 5
         shell: pwsh
@@ -40,7 +40,7 @@ jobs:
             -OutFile $installer
 
           if (-not (Test-Path $installer)) {
-            Write-Error "Impossible de telecharger MT5."
+            Write-Error "Le programme d'installation MT5 est introuvable."
             exit 1
           }
 
@@ -49,10 +49,10 @@ jobs:
             -ArgumentList "/auto" `
             -Wait
 
-          Write-Host "Installation de MT5 terminee."
+          Write-Host "Installation MT5 terminee."
 
       # ============================================================
-      # 3. RECHERCHE DE METAEDITOR
+      # 3. TROUVER METAEDITOR
       # ============================================================
       - name: Trouver MetaEditor
         shell: pwsh
@@ -93,54 +93,94 @@ jobs:
               -Encoding utf8
 
       # ============================================================
-      # 4. VERIFIER LA STANDARD LIBRARY PRESENTE DANS LE DEPOT
+      # 4. INSTALLER LA STANDARD LIBRARY MQL5
       # ============================================================
-      - name: Verifier la Standard Library MQL5
+      - name: Installer Standard Library MQL5
         shell: pwsh
         run: |
           Write-Host "========================================"
-          Write-Host "VERIFICATION STANDARD LIBRARY"
+          Write-Host "INSTALLATION STANDARD LIBRARY MQL5"
           Write-Host "========================================"
 
-          $mql5Root = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            "MQL5"
+          $buildDir = "C:\Build"
+          $mql5Root = "$buildDir\MQL5"
+          $includeDir = "$mql5Root\Include"
 
-          $includeDir = Join-Path `
-            $mql5Root `
-            "Include"
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $includeDir | Out-Null
 
-          $tradeFile = Join-Path `
-            $includeDir `
-            "Trade\Trade.mqh"
+          Write-Host "MQL5 root : $mql5Root"
+          Write-Host "Include   : $includeDir"
 
-          Write-Host "Racine MQL5 : $mql5Root"
-          Write-Host "Include      : $includeDir"
-          Write-Host "Trade.mqh    : $tradeFile"
+          # --------------------------------------------------------
+          # Telechargement direct de la bibliotheque MQL5
+          # --------------------------------------------------------
 
-          if (-not (Test-Path $mql5Root)) {
-            Write-Error "Le dossier MQL5 est absent du depot."
+          $libraryUrl = "https://github.com/gsemet/mt5-include.git"
+
+          Write-Host ""
+          Write-Host "Clonage de la Standard Library..."
+
+          git clone `
+            --depth 1 `
+            $libraryUrl `
+            $includeDir
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Impossible de recuperer la Standard Library MQL5."
             exit 1
           }
 
-          if (-not (Test-Path $includeDir)) {
-            Write-Error "Le dossier MQL5\Include est absent du depot."
-            exit 1
+          # --------------------------------------------------------
+          # Le clone cree un .git dans Include.
+          # On le supprime : MetaEditor n'en a pas besoin.
+          # --------------------------------------------------------
+
+          $gitFolder = "$includeDir\.git"
+
+          if (Test-Path $gitFolder) {
+            Remove-Item `
+              -Path $gitFolder `
+              -Recurse `
+              -Force
           }
+
+          # --------------------------------------------------------
+          # VERIFICATIONS
+          # --------------------------------------------------------
+
+          $tradeFile = "$includeDir\Trade\Trade.mqh"
+          $objectFile = "$includeDir\Object.mqh"
+          $stdlibFile = "$includeDir\StdLibErr.mqh"
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "VERIFICATION DES DEPENDANCES"
+          Write-Host "========================================"
+
+          Write-Host "Trade.mqh   : $tradeFile"
+          Write-Host "Object.mqh  : $objectFile"
+          Write-Host "StdLibErr   : $stdlibFile"
 
           if (-not (Test-Path $tradeFile)) {
-            Write-Error ""
-            Write-Error "Trade\Trade.mqh est absent."
-            Write-Error ""
-            Write-Error "Le depot doit contenir :"
-            Write-Error "MQL5\Include\Trade\Trade.mqh"
-            Write-Error ""
-            Write-Error "Aucune bibliotheque externe ne sera telechargee."
+            Write-Error "Trade\Trade.mqh introuvable."
+            exit 1
+          }
+
+          if (-not (Test-Path $objectFile)) {
+            Write-Error "Object.mqh introuvable."
+            exit 1
+          }
+
+          if (-not (Test-Path $stdlibFile)) {
+            Write-Error "StdLibErr.mqh introuvable."
             exit 1
           }
 
           Write-Host ""
-          Write-Host "Trade.mqh trouve."
+          Write-Host "Standard Library MQL5 OK."
 
           $mqhFiles = Get-ChildItem `
             -Path $includeDir `
@@ -153,19 +193,239 @@ jobs:
           Write-Host "Nombre de fichiers MQH : $($mqhFiles.Count)"
 
           if ($mqhFiles.Count -eq 0) {
-            Write-Error "Aucun fichier MQH dans MQL5\Include."
+            Write-Error "Aucun fichier MQH trouve."
             exit 1
           }
 
-          Write-Host ""
-          Write-Host "Standard Library valide."
+          # Exporter la racine MQL5 pour l'etape suivante.
+          "MQL5_ROOT=$mql5Root" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8
 
       # ============================================================
-      # 5. RECHERCHE DU ROBOT
+      # 5. TROUVER LE ROBOT
       # ============================================================
       - name: Trouver le robot
         shell: pwsh
         run: |
           Write-Host "========================================"
-          Write-Host "RECHERCHE DU ROBOT MQ5"
-          Write-Host
+          Write-Host "RECHERCHE DU FICHIER MQ5"
+          Write-Host "========================================"
+
+          $sourceFile = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter "BlackHippo_Buffalo_Pelerin_v1_10_AUDITED.mq5" `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $sourceFile) {
+            Write-Error "BlackHippo_Buffalo_Pelerin_v1_10_AUDITED.mq5 introuvable."
+            exit 1
+          }
+
+          Write-Host "Robot trouve :"
+          Write-Host $sourceFile.FullName
+
+          "SOURCE_FILE=$($sourceFile.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8
+
+      # ============================================================
+      # 6. COMPILER
+      # ============================================================
+      - name: Compiler le robot
+        shell: pwsh
+        run: |
+          Write-Host "========================================"
+          Write-Host "COMPILATION MQL5"
+          Write-Host "========================================"
+
+          $sourceFile = $env:SOURCE_FILE
+          $mql5Root = $env:MQL5_ROOT
+
+          if (-not (Test-Path $sourceFile)) {
+            Write-Error "Fichier source introuvable."
+            exit 1
+          }
+
+          $tradeFile = "$mql5Root\Include\Trade\Trade.mqh"
+
+          if (-not (Test-Path $tradeFile)) {
+            Write-Error "Trade.mqh introuvable avant compilation."
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "MetaEditor : $env:METAEDITOR_PATH"
+          Write-Host "MQL5 root  : $mql5Root"
+          Write-Host "Source     : $sourceFile"
+          Write-Host "Trade.mqh  : $tradeFile"
+
+          # --------------------------------------------------------
+          # IMPORTANT :
+          # /include pointe vers la RACINE MQL5.
+          #
+          # MetaEditor trouvera :
+          #
+          # C:\Build\MQL5\Include\Trade\Trade.mqh
+          # --------------------------------------------------------
+
+          $arguments = @(
+            "/compile:$sourceFile"
+            "/include:$mql5Root"
+            "/log"
+          )
+
+          Write-Host ""
+          Write-Host "Arguments MetaEditor :"
+
+          foreach ($argument in $arguments) {
+            Write-Host $argument
+          }
+
+          Write-Host ""
+          Write-Host "Lancement de MetaEditor..."
+
+          $process = Start-Process `
+            -FilePath $env:METAEDITOR_PATH `
+            -ArgumentList $arguments `
+            -Wait `
+            -PassThru
+
+          Write-Host ""
+          Write-Host "Code retour MetaEditor : $($process.ExitCode)"
+
+          Start-Sleep -Seconds 3
+
+          # ========================================================
+          # 7. JOURNAL DE COMPILATION
+          # ========================================================
+
+          $sourceDirectory = Split-Path `
+            -Parent `
+            $sourceFile
+
+          $sourceName = [System.IO.Path]::GetFileNameWithoutExtension(
+            $sourceFile
+          )
+
+          $logFile = Join-Path `
+            $sourceDirectory `
+            "$sourceName.log"
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "JOURNAL DE COMPILATION"
+          Write-Host "========================================"
+
+          if (-not (Test-Path $logFile)) {
+            Write-Error "Journal de compilation introuvable :"
+            Write-Error $logFile
+            exit 1
+          }
+
+          $logContent = Get-Content `
+            -Path $logFile `
+            -Encoding Unicode `
+            -ErrorAction Stop
+
+          $logContent | ForEach-Object {
+            Write-Host $_
+          }
+
+          # ========================================================
+          # 8. VERIFIER RESULT
+          # ========================================================
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "RESULTAT DE LA COMPILATION"
+          Write-Host "========================================"
+
+          $resultLine = $logContent |
+            Where-Object {
+              $_ -match "^Result:"
+            } |
+            Select-Object -Last 1
+
+          if (-not $resultLine) {
+            Write-Error "La ligne Result est absente du journal."
+            exit 1
+          }
+
+          Write-Host $resultLine
+
+          if ($resultLine -notmatch "0 errors") {
+            Write-Error "La compilation contient des erreurs."
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "COMPILATION REUSSIE."
+
+          # ========================================================
+          # 9. RECHERCHE DU EX5
+          # ========================================================
+
+          $expectedEx5 = Join-Path `
+            $sourceDirectory `
+            "$sourceName.ex5"
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "RECHERCHE DU FICHIER EX5"
+          Write-Host "========================================"
+
+          if (-not (Test-Path $expectedEx5)) {
+            Write-Error "Aucun fichier EX5 genere."
+            Write-Error "Fichier attendu : $expectedEx5"
+            exit 1
+          }
+
+          Write-Host "EX5 trouve :"
+          Write-Host $expectedEx5
+
+          # ========================================================
+          # 10. COPIE VERS C:\Build
+          # ========================================================
+
+          $buildDir = "C:\Build"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $buildDir | Out-Null
+
+          Copy-Item `
+            -Path $expectedEx5 `
+            -Destination "$buildDir\$sourceName.ex5" `
+            -Force
+
+          Copy-Item `
+            -Path $logFile `
+            -Destination "$buildDir\$sourceName.log" `
+            -Force
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "BUILD TERMINE"
+          Write-Host "========================================"
+
+          Write-Host "EX5 : $buildDir\$sourceName.ex5"
+          Write-Host "LOG : $buildDir\$sourceName.log"
+
+      # ============================================================
+      # 11. RECUPERER L'ARTIFACT
+      # ============================================================
+      - name: Recuperer le fichier compile
+        uses: actions/upload-artifact@v4
+        with:
+          name: Robot-Compile
+          path: |
+            C:\Build\*.ex5
+            C:\Build\*.log
+          if-no-files-found: error
